@@ -5,7 +5,7 @@ This repository contains several Python scripts to assist in music video product
 1. `video_chopper.py`
 2. `music_video_storyboard.py`
 3. `vocal_parts_to_sheet_music.py`
-4. `vocal_to_sheet_music.py`
+4. `vocal_to_sheet_music.py` - OLD, PROBABLY DELETE
 5. `extract_audio.py`
 6. `webm_to_mp3.py`
 7. `youtube_downloader.py` -OLD, USE EXTRACT AUDIO INSTEAD

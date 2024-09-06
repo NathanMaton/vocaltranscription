@@ -9,7 +9,16 @@ def sanitize_filename(filename):
 
 def extract_audio(data_folder):
     video_url = input("Enter the YouTube URL: ")
-    cut_to_15_seconds = input("Do you want to cut the audio to 15 seconds? (y/n): ").lower() == 'y'
+    cut_audio = input("Do you want to cut the audio? (y/n): ").lower() == 'y'
+    if cut_audio:
+        cut_duration = input("Enter duration in seconds (15 or 90): ")
+        if cut_duration not in ['15', '90']:
+            print("Invalid duration. Defaulting to full audio.")
+            cut_duration = None
+        else:
+            cut_duration = int(cut_duration)
+    else:
+        cut_duration = None
     
     extracted_audio_folder = os.path.join(data_folder, 'extracted_audio')
     os.makedirs(extracted_audio_folder, exist_ok=True)
@@ -46,15 +55,15 @@ def extract_audio(data_folder):
         print(f"Error: The expected output file {output_path} was not created.")
         return
 
-    if cut_to_15_seconds:
-        temp_output_path = os.path.join(extracted_audio_folder, f'{sanitized_title}_15sec.mp3')
+    if cut_duration:
+        temp_output_path = os.path.join(extracted_audio_folder, f'{sanitized_title}_{cut_duration}sec.mp3')
         ffmpeg_command = [
-            'ffmpeg', '-i', output_path, '-t', '15', '-acodec', 'copy', temp_output_path
+            'ffmpeg', '-i', output_path, '-t', str(cut_duration), '-acodec', 'copy', temp_output_path
         ]
         try:
             subprocess.run(ffmpeg_command, check=True, stderr=subprocess.PIPE, text=True)
             os.replace(temp_output_path, output_path)
-            print("Audio cut to 15 seconds.")
+            print(f"Audio cut to {cut_duration} seconds.")
         except subprocess.CalledProcessError as e:
             print(f"Error cutting audio: {e.stderr}")
             return
