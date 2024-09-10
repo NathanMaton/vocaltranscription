@@ -5,6 +5,7 @@ from basic_pitch.inference import predict as bp_predict
 import librosa
 import pretty_midi
 import music21 as m21
+from scipy.cluster.vq import kmeans, vq
 
 def examine_audio_and_prediction(audio_path):
     try:
@@ -59,66 +60,178 @@ def quantize_duration_quarter(duration):
     else:  # Longer than dotted half note
         return round(duration / 1.0) * 1.0  # Round to nearest quarter note
 
-def create_part_from_midi(midi_data, part_name, quantize_func, detect_silence=False):
-    part = m21.stream.Part()
-    part.partName = part_name
-    
-    last_end_time = 0
+def detect_key_and_meter(midi_data):
+    stream = m21.stream.Stream()
     for instrument in midi_data.instruments:
         for note in instrument.notes:
-            if detect_silence:
-                # Add a rest if there's a gap
-                if note.start > last_end_time:
-                    rest_duration = note.start - last_end_time
-                    rest = m21.note.Rest()
-                    rest.quarterLength = quantize_func(rest_duration)
-                    if rest.quarterLength > 0:
-                        part.append(rest)
-            
-            duration = note.end - note.start
-            quantized_duration = quantize_func(duration)
+            m21_note = m21.note.Note(note.pitch)
+            m21_note.quarterLength = note.end - note.start
+            stream.append(m21_note)
+    
+    key = stream.analyze('key')
+    print(f"Detected key: {key.tonic.name} {key.mode}", file=sys.stderr)
+    
+    # Simple time signature detection
+    total_duration = sum(n.quarterLength for n in stream.notesAndRests)
+    num_measures = round(total_duration / 4)  # Assume 4 beats per measure
+    if num_measures > 0:
+        beats_per_measure = round(total_duration / num_measures)
+        time_signature = m21.meter.TimeSignature(f'{beats_per_measure}/4')
+    else:
+        time_signature = m21.meter.TimeSignature('4/4')  # Default to 4/4 if detection fails
+    
+    print(f"Detected time signature: {time_signature.ratioString}", file=sys.stderr)
+    return key, time_signature
+
+def adaptive_quantize(duration):
+    grid = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
+    return min(grid, key=lambda x: abs(x - duration))
+
+def get_beat_positions(audio_path):
+    y, sr = librosa.load(audio_path)
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr).tolist()
+    return beat_times, float(tempo)
+
+def quantize_to_nearest_beat(note_time, beat_times):
+    return beat_times[np.argmin(np.abs(np.array(beat_times) - note_time))]
+
+def cluster_note_durations(durations, n_clusters=5):
+    durations = np.array(durations).reshape(-1, 1)
+    centroids, _ = kmeans(durations, n_clusters)
+    return centroids.flatten().tolist()
+
+def advanced_quantize(note_start, note_end, beat_times, duration_clusters):
+    quantized_start = quantize_to_nearest_beat(note_start, beat_times)
+    raw_duration = note_end - note_start
+    quantized_duration = min(duration_clusters, key=lambda x: abs(x - raw_duration))
+    
+    # Round to nearest expressible duration, favoring longer durations
+    expressible_durations = [1/4, 1/2, 1, 2, 4, 8]  # Removed shorter durations
+    quantized_duration = min(expressible_durations, key=lambda x: abs(x - quantized_duration))
+    
+    return quantized_start, quantized_duration
+
+def merge_short_notes(notes, minimum_duration=0.25):  # minimum_duration is a quarter note
+    merged_notes = []
+    current_note = None
+    
+    for note in notes:
+        if current_note is None:
+            current_note = note
+        elif note.pitch == current_note.pitch and note.start - current_note.end < 0.1:  # Allow small gaps
+            current_note.end = note.end
+        else:
+            if current_note.end - current_note.start >= minimum_duration:
+                merged_notes.append(current_note)
+            current_note = note
+    
+    if current_note and current_note.end - current_note.start >= minimum_duration:
+        merged_notes.append(current_note)
+    
+    return merged_notes
+
+def create_part_from_midi(midi_data, part_name, beat_times, tempo, detect_silence=False, key=None):
+    part = m21.stream.Part()
+    part.partName = part_name
+
+    # Cluster note durations
+    note_durations = [note.end - note.start for instrument in midi_data.instruments for note in instrument.notes]
+    duration_clusters = cluster_note_durations(note_durations)
+
+    # Convert beat_times to a list if it's a numpy array
+    beat_times = beat_times.tolist() if isinstance(beat_times, np.ndarray) else beat_times
+
+    # Ensure tempo is a scalar value
+    tempo = float(tempo) if isinstance(tempo, np.ndarray) else tempo
+
+    for instrument in midi_data.instruments:
+        # Merge short notes before quantization
+        merged_notes = merge_short_notes(instrument.notes)
+        
+        for note in merged_notes:
+            note_start, note_duration = advanced_quantize(note.start, note.end, beat_times, duration_clusters)
             
             m21_note = m21.note.Note(note.pitch)
-            m21_note.quarterLength = quantized_duration
+            m21_note.quarterLength = note_duration
+            m21_note.volume.velocity = note.velocity
+
+            if key:
+                scale = key.getScale()
+                scale_pitches = [p.name for p in scale.getPitches()]
+                pitch_class = m21_note.pitch.pitchClass
+                pitch_name = scale_pitches[pitch_class % len(scale_pitches)]
+                m21_note.pitch.name = pitch_name
+
             part.append(m21_note)
-            
-            last_end_time = note.end
-    
-    if detect_silence:
-        # Add a final rest if needed
-        if last_end_time < midi_data.get_end_time():
-            final_rest_duration = midi_data.get_end_time() - last_end_time
-            final_rest = m21.note.Rest()
-            final_rest.quarterLength = quantize_func(final_rest_duration)
-            if final_rest.quarterLength > 0:
-                part.append(final_rest)
-    
+
     return part
 
-def create_sheet_music(lead_midi, harmony_midi, output_path, quantize_func, suffix, include_harmony=False):
+def create_sheet_music(lead_midi, harmony_midi, lead_audio_path, harmony_audio_path, output_path, suffix, include_harmony=False):
     score = m21.stream.Score()
 
-    lead_part = create_part_from_midi(lead_midi, "Lead Vocal", quantize_func, detect_silence=False)
+    try:
+        detected_key, detected_time_signature = detect_key_and_meter(lead_midi)
+        print(f"Detected key and time signature: {detected_key}, {detected_time_signature}")
+    except Exception as e:
+        print(f"Error in detect_key_and_meter: {str(e)}")
+        return
+
+    try:
+        lead_beat_times, lead_tempo = get_beat_positions(lead_audio_path)
+        print(f"Lead beat times and tempo detected: {len(lead_beat_times)} beats, tempo: {lead_tempo}")
+    except Exception as e:
+        print(f"Error in get_beat_positions for lead: {str(e)}")
+        return
+
+    try:
+        lead_part = create_part_from_midi(lead_midi, "Lead Vocal", lead_beat_times, lead_tempo, detect_silence=False, key=detected_key)
+        print("Lead part created successfully")
+    except Exception as e:
+        print(f"Error in create_part_from_midi for lead: {str(e)}")
+        return
+
     lead_part.insert(0, m21.instrument.Instrument())
+    lead_part.insert(0, detected_time_signature)
+    key_signature = m21.key.KeySignature(detected_key.sharps)
+    lead_part.insert(0, key_signature)
     
-    # Add time signature and key signature
-    lead_part.insert(0, m21.meter.TimeSignature('4/4'))
-    lead_part.insert(0, m21.key.Key('C'))
-    
-    # Add measures
-    lead_part.makeMeasures(inPlace=True)
+    try:
+        lead_part.makeMeasures(inPlace=True)
+        print("Measures created for lead part")
+    except Exception as e:
+        print(f"Error in makeMeasures for lead part: {str(e)}")
+        return
     
     score.append(lead_part)
     
-    if include_harmony and harmony_midi:
-        harmony_part = create_part_from_midi(harmony_midi, "Harmony Vocal", quantize_func, detect_silence=True)
+    if include_harmony and harmony_midi and harmony_audio_path:
+        try:
+            harmony_beat_times, harmony_tempo = get_beat_positions(harmony_audio_path)
+            print(f"Harmony beat times and tempo detected: {len(harmony_beat_times)} beats, tempo: {harmony_tempo}")
+        except Exception as e:
+            print(f"Error in get_beat_positions for harmony: {str(e)}")
+            return
+
+        try:
+            harmony_part = create_part_from_midi(harmony_midi, "Harmony Vocal", harmony_beat_times, harmony_tempo, detect_silence=True, key=detected_key)
+            print("Harmony part created successfully")
+        except Exception as e:
+            print(f"Error in create_part_from_midi for harmony: {str(e)}")
+            return
+
         harmony_part.insert(0, m21.instrument.Instrument())
-        harmony_part.insert(0, m21.meter.TimeSignature('4/4'))
-        harmony_part.insert(0, m21.key.Key('C'))
+        harmony_part.insert(0, detected_time_signature)
+        harmony_part.insert(0, key_signature)
         
-        # Ensure harmony part has the same number of measures as lead part
         lead_measures = len(lead_part.getElementsByClass('Measure'))
-        harmony_part.makeMeasures(inPlace=True)
+        try:
+            harmony_part.makeMeasures(inPlace=True)
+            print("Measures created for harmony part")
+        except Exception as e:
+            print(f"Error in makeMeasures for harmony part: {str(e)}")
+            return
+
         harmony_measures = len(harmony_part.getElementsByClass('Measure'))
         
         if harmony_measures < lead_measures:
@@ -127,13 +240,19 @@ def create_sheet_music(lead_midi, harmony_midi, output_path, quantize_func, suff
         
         score.append(harmony_part)
     
-    # Clean up the score
-    score.makeNotation(inPlace=True)
+    try:
+        score.makeNotation(inPlace=True)
+        print("Notation created for score")
+    except Exception as e:
+        print(f"Error in makeNotation: {str(e)}")
+        return
     
-    # Write the score to a file
     output_path_with_suffix = output_path.replace('.xml', f'_{suffix}.xml')
-    score.write('musicxml', output_path_with_suffix)
-    print(f"Sheet music created: {output_path_with_suffix}")
+    try:
+        score.write('musicxml', output_path_with_suffix)
+        print(f"Sheet music created: {output_path_with_suffix}")
+    except Exception as e:
+        print(f"Error writing musicxml: {str(e)}")
 
 def main():
     output_dir = "data/extracted_audio"
@@ -151,21 +270,11 @@ def main():
     
     if lead_midi:
         try:
-            # Lead vocal only, 16th notes
-            create_sheet_music(lead_midi, None, output_path, quantize_duration_16th, "16th_lead")
-            
-            # Lead vocal only, 8th notes
-            create_sheet_music(lead_midi, None, output_path, quantize_duration_8th, "8th_lead")
-            
-            # Lead vocal only, quarter notes
-            create_sheet_music(lead_midi, None, output_path, quantize_duration_quarter, "quarter_lead")
+            create_sheet_music(lead_midi, None, lead_path, None, output_path, "lead")
             
             if harmony_midi:
-                # Harmony vocal only, 8th notes
-                create_sheet_music(harmony_midi, None, output_path, quantize_duration_8th, "8th_harmony", include_harmony=True)
-                
-                # Lead and harmony vocals, 8th notes
-                create_sheet_music(lead_midi, harmony_midi, output_path, quantize_duration_8th, "8th_lead_and_harmony", include_harmony=True)
+                create_sheet_music(harmony_midi, None, harmony_path, None, output_path, "harmony", include_harmony=True)
+                create_sheet_music(lead_midi, harmony_midi, lead_path, harmony_path, output_path, "lead_and_harmony", include_harmony=True)
             else:
                 print("Harmony vocal file not found. Skipping harmony and combined outputs.")
             
