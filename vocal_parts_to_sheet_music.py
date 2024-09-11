@@ -11,6 +11,8 @@ from tqdm import tqdm
 import soundfile as sf
 import pickle
 from collections import Counter
+import io
+import tempfile
 
 def preprocess_audio(audio_path, skip_noise_reduction=True):
     try:
@@ -224,11 +226,21 @@ def create_sheet_music(lead_midi, harmony_midi, output_path, quantize_func, suff
     # Clean up the score
     score.makeNotation(inPlace=True)
     
-    # Write the score to a file
-    output_filename = f"{os.path.splitext(input_filename)[0]}_{suffix}.xml"
-    output_path_with_suffix = os.path.join(os.path.dirname(output_path), output_filename)
-    score.write('musicxml', output_path_with_suffix)
-    print(f"Sheet music created: {output_path_with_suffix}")
+    # Write the score to a file or return as string
+    if output_path == "memory":
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as temp_file:
+            score.write('musicxml', temp_file.name)
+        
+        with open(temp_file.name, 'r') as file:
+            musicxml_content = file.read()
+        
+        os.unlink(temp_file.name)
+        return musicxml_content
+    else:
+        output_filename = f"{os.path.splitext(input_filename)[0]}_{suffix}.xml"
+        output_path_with_suffix = os.path.join(os.path.dirname(output_path), output_filename)
+        score.write('musicxml', output_path_with_suffix)
+        print(f"Sheet music created: {output_path_with_suffix}")
 
 def test_configuration(lead_path, harmony_path, output_path, config, config_name):
     print(f"\nTesting configuration: {config_name}")
