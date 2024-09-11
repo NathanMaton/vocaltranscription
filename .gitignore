@@ -2,3 +2,9 @@ data/*
 .DS_Store
 old/*
 __pycache__/
+__pycache__
+*.pyc
+.env
+*.wav
+*.mp3
+*.m4a

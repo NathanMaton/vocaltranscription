@@ -16,7 +16,7 @@ app = Flask(__name__, static_folder='static')
 # Add CSP headers
 @app.after_request
 def add_header(response):
-    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://code.jquery.com https://cdnjs.cloudflare.com https://www.verovio.org; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' https:; connect-src 'self' https://itunes.apple.com https://gleitz.github.io;"
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://code.jquery.com https://cdnjs.cloudflare.com https://www.verovio.org; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' https:; connect-src 'self' https://itunes.apple.com https://gleitz.github.io; font-src 'self' https://gleitz.github.io;"
     return response
 
 @app.route('/')
@@ -46,8 +46,7 @@ def search_song():
 
 @app.route('/process', methods=['POST'])
 def process_audio():
-    logger.info("Processing audio request received")
-    temp_files = []
+    app.logger.debug("Processing audio request received")
     try:
         data = request.json
         start_time = float(data.get('start_time', 0))
@@ -55,58 +54,70 @@ def process_audio():
         audio_url = data.get('audio_url')
 
         if not audio_url:
-            logger.error("Audio URL is missing")
+            app.logger.error("Audio URL is missing")
             return jsonify({'error': 'Audio URL is missing'}), 400
 
-        logger.info(f"Downloading audio from {audio_url}")
+        app.logger.debug(f"Downloading audio from {audio_url}")
         response = requests.get(audio_url)
         if response.status_code != 200:
-            logger.error(f"Failed to download audio. Status code: {response.status_code}")
+            app.logger.error(f"Failed to download audio. Status code: {response.status_code}")
             return jsonify({'error': 'Failed to download audio'}), 400
 
         with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as temp_file:
             temp_file.write(response.content)
             temp_file_path = temp_file.name
-            temp_files.append(temp_file_path)
 
-        logger.info(f"Audio saved to temporary file: {temp_file_path}")
+        app.logger.debug(f"Audio saved to temporary file: {temp_file_path}")
 
-        logger.info("Converting audio to WAV and extracting selected portion")
+        app.logger.debug("Converting audio to WAV and extracting selected portion")
         audio = AudioSegment.from_file(temp_file_path, format="m4a")
         selected_audio = audio[int(start_time*1000):int(end_time*1000)]
         
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as wav_file:
             selected_audio.export(wav_file.name, format="wav")
             wav_file_path = wav_file.name
-            temp_files.append(wav_file_path)
 
-        logger.info(f"Selected audio saved to: {wav_file_path}")
+        app.logger.debug(f"Selected audio saved to: {wav_file_path}")
 
-        logger.info("Processing audio and generating sheet music")
+        app.logger.debug("Processing audio and generating sheet music")
         lead_midi = examine_audio_and_prediction(wav_file_path, skip_noise_reduction=True)
         
         if lead_midi:
             musicxml = create_sheet_music(lead_midi, None, "memory", quantize_duration_extended, "processed", input_filename="processed.xml")
             
-            logger.info("Sheet music generated successfully")
-            return jsonify({'musicxml': musicxml})
+            # Generate MIDI file
+            midi_buffer = io.BytesIO()
+            lead_midi.write(midi_buffer)
+            midi_buffer.seek(0)
+            
+            app.logger.debug("Sheet music and MIDI generated successfully")
+            
+            # Clean up temporary files
+            os.unlink(temp_file_path)
+            os.unlink(wav_file_path)
+            
+            return jsonify({
+                'musicxml': musicxml,
+                'midi': midi_buffer.getvalue().hex()  # Send MIDI data as hexadecimal string
+            })
         else:
-            logger.error("Failed to process audio: No MIDI data generated")
+            app.logger.error("Failed to process audio: No MIDI data generated")
+            # Clean up temporary files
+            os.unlink(temp_file_path)
+            os.unlink(wav_file_path)
             return jsonify({'error': 'Failed to process audio: No MIDI data generated'}), 500
     except Exception as e:
-        logger.exception("An error occurred during audio processing")
+        app.logger.exception("An error occurred during audio processing")
         return jsonify({'error': str(e)}), 500
-    finally:
-        # Clean up temporary files
-        for temp_file in temp_files:
-            try:
-                os.unlink(temp_file)
-            except Exception as e:
-                logger.error(f"Failed to delete temporary file {temp_file}: {str(e)}")
 
 @app.route('/midi/<path:filename>')
 def serve_midi(filename):
     return send_file(f'static/midi/{filename}', mimetype='audio/midi')
 
+@app.route('/static/soundfonts/<path:filename>')
+def serve_soundfont(filename):
+    app.logger.debug(f"Serving soundfont file: {filename}")
+    return send_file(f'static/soundfonts/{filename}', mimetype='application/javascript')
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)

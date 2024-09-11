@@ -1,0 +1,11 @@
+Flask==2.0.1
+gunicorn==20.1.0
+requests==2.26.0
+pydub==0.25.1
+numpy==1.21.2
+librosa==0.8.1
+pretty_midi==0.2.9
+music21==7.1.0
+tqdm==4.62.3
+soundfile==0.10.3.post1
+python-dotenv==1.0.0
