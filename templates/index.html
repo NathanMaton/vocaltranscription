@@ -51,12 +51,14 @@
             border-radius: 4px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
+            display: none;
         }
         #audio-player {
             background-color: white;
             padding: 20px;
             border-radius: 4px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: none;
         }
         #waveform-container {
             width: 100%;
@@ -127,12 +129,14 @@
 
         #sheet-music {
             width: 100%;
-            max-width: 800px;
+            max-width: 100%;
             margin: 20px auto;
             background-color: #fff;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
             padding: 20px;
             overflow-x: auto;
+            display: none;
+            box-sizing: border-box;
         }
 
         #sheet-music svg {
@@ -152,62 +156,23 @@
             color: #3498db;
         }
 
-        #play-sheet-music {
-            margin: 10px 0;
-            padding: 10px 20px;
-            background-color: #2ecc71;
-            color: white;
-            border: none;
+        #disclaimer {
+            background-color: #ffeeba;
+            border: 1px solid #ffeeba;
             border-radius: 4px;
-            cursor: pointer;
+            padding: 15px;
+            margin-bottom: 20px;
+            color: #856404;
         }
 
-        #play-sheet-music:hover {
-            background-color: #27ae60;
-        }
-
-        #play-sheet-music:disabled {
-            background-color: #95a5a6;
-            cursor: not-allowed;
-        }
-
-        #midi-loading {
+        #processing-message {
             display: none;
-            color: #3498db;
-            margin-top: 10px;
-        }
-
-        #midi-error {
-            display: none;
-            color: #e74c3c;
-            margin-top: 10px;
-        }
-
-        #waveform-container {
-            position: relative;
-            width: 100%;
-            height: 100px;
-            background-color: #f0f0f0;
-        }
-        #selection {
-            position: absolute;
-            height: 100%;
-            background-color: rgba(0, 123, 255, 0.3);
-            pointer-events: none;
-        }
-        .selection-handle {
-            width: 10px;
-            height: 100%;
-            background-color: rgba(0, 123, 255, 0.7);
-            position: absolute;
-            top: 0;
-            cursor: ew-resize;
-        }
-        #left-handle {
-            left: 0;
-        }
-        #right-handle {
-            right: 0;
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 20px;
+            color: #155724;
         }
     </style>
 </head>
@@ -216,12 +181,18 @@
         <img src="{{ url_for('static', filename='harmony_logo.png') }}" alt="Harmony Logo" class="logo">
         <h1>Vocal Harmony Detector</h1>
     </div>
+
+    <!-- Add the disclaimer here -->
+    <div id="disclaimer">
+        {{ disclaimer }}
+    </div>
+
     <div id="search-container">
-        <input type="text" id="search-input" placeholder="Search for a song">
+        <input type="text" id="search-input" placeholder="If I didn't know better by the civil wars">
         <button id="search-button">Search</button>
     </div>
     <div id="search-result"></div>
-    <div id="audio-player" style="display: none;">
+    <div id="audio-player">
         <audio id="audio" controls style="width: 100%;"></audio>
         <div id="waveform-container">
             <div id="selection">
@@ -247,18 +218,13 @@
     </div>
     <div class="processing-container">
         <div id="processing-result"></div>
-    </div>
-    <div class="processing-container">
-        <button id="play-sheet-music" style="display: none;" disabled>Play Sheet Music</button>
-        <div id="midi-loading">Loading MIDI sounds...</div>
-        <div id="midi-error"></div>
+        <!-- Add the processing message here -->
+        <div id="processing-message">Processing audio. This may take 30-60 seconds. Please wait...</div>
     </div>
     <div id="sheet-music"></div>
 
     <script>
         let verovio;
-        let midiBuffer;
-        let midiLoaded = false;
         let audio;
         let startTime = 0;
         let endTime = 0;
@@ -283,40 +249,13 @@
                 });
         }
 
-        function loadMIDI() {
-            return new Promise((resolve, reject) => {
-                $('#midi-status').text('Loading MIDI sounds...');
-                MIDI.loadPlugin({
-                    soundfontUrl: "/static/soundfonts/",
-                    instrument: "acoustic_grand_piano",
-                    onprogress: function(state, progress) {
-                        console.log(state, progress);
-                        $('#midi-status').text(`Loading MIDI sounds... ${Math.round(progress * 100)}%`);
-                    },
-                    onsuccess: function() {
-                        console.log("MIDI.js loaded successfully");
-                        midiLoaded = true;
-                        $('#midi-status').text('MIDI sounds loaded successfully.');
-                        $('#play-sheet-music').prop('disabled', false);
-                        resolve();
-                    },
-                    onerror: function(error) {
-                        console.error("Error loading MIDI.js:", error);
-                        $('#midi-status').text('Failed to load MIDI sounds. Playback may not be available.');
-                        reject(error);
-                    }
-                });
-            });
-        }
-
         $(document).ready(function() {
-            Promise.all([loadVerovio(), loadMIDI()])
+            loadVerovio()
                 .then(() => {
                     console.log("All libraries loaded successfully");
                 })
                 .catch((error) => {
                     console.error("Failed to load libraries:", error);
-                    $('#midi-status').text('Failed to load required libraries. Some features may not work.');
                 });
 
             audio = document.getElementById('audio');
@@ -338,7 +277,7 @@
                     data: JSON.stringify({ query: query }),
                     success: function(response) {
                         console.log("Search response:", response);
-                        $('#search-result').empty();
+                        $('#search-result').empty().show();
                         $('#search-result').html(`
                             <p>Title: ${response.title}</p>
                             <p>Artist: ${response.artist}</p>
@@ -362,13 +301,15 @@
                             $('#search-result').append('<p>No preview available for this song.</p>');
                             $('#audio-player').hide();
                         }
-                        $('#processing-result').empty();
+                        $('#processing-result').empty().hide();
+                        $('#sheet-music').empty().hide();
                     },
                     error: function(xhr) {
                         console.error("Search error:", xhr);
-                        $('#search-result').html(`<p>Error: ${xhr.responseJSON ? xhr.responseJSON.error : 'Failed to search for song'}</p>`);
+                        $('#search-result').html(`<p>Error: ${xhr.responseJSON ? xhr.responseJSON.error : 'Failed to search for song'}</p>`).show();
                         $('#audio-player').hide();
-                        $('#processing-result').empty();
+                        $('#processing-result').empty().hide();
+                        $('#sheet-music').empty().hide();
                     }
                 });
             });
@@ -478,7 +419,7 @@
 
             $('#process-button').click(function() {
                 if (!verovio) {
-                    $('#processing-result').html('<p>Error: Verovio is not loaded. Please try again in a moment.</p>');
+                    $('#processing-result').html('<p>Error: Verovio is not loaded. Please try again in a moment.</p>').show();
                     return;
                 }
 
@@ -487,9 +428,12 @@
                 const audioUrl = $('#audio').attr('src');
                 
                 if (!audioUrl) {
-                    $('#processing-result').html('<p>Error: No audio loaded. Please search for a song first.</p>');
+                    $('#processing-result').html('<p>Error: No audio loaded. Please search for a song first.</p>').show();
                     return;
                 }
+                
+                // Show processing message
+                $('#processing-message').show();
                 
                 $.ajax({
                     url: '/process',
@@ -501,7 +445,10 @@
                         audio_url: audioUrl
                     }),
                     success: function(response) {
-                        if (response.musicxml && response.midi) {
+                        // Hide processing message
+                        $('#processing-message').hide();
+                        
+                        if (response.musicxml) {
                             const options = {
                                 scale: 35,
                                 adjustPageHeight: true,
@@ -516,34 +463,21 @@
                             };
                             verovio.loadData(response.musicxml);
                             const svg = verovio.renderToSVG(1, options);
-                            $('#sheet-music').html(svg);
-                            $('#processing-result').html('<p>Sheet music generated successfully!</p>');
-                            $('#play-sheet-music').show().prop('disabled', false);
-
-                            // Store MIDI data
-                            midiBuffer = new Uint8Array(response.midi.match(/[\da-f]{2}/gi).map(h => parseInt(h, 16)));
+                            $('#sheet-music').html(svg).show();
+                            $('#processing-result').html('<p>Sheet music generated successfully!</p>').show();
                         } else {
-                            $('#processing-result').html('<p>Error: Failed to generate sheet music.</p>');
-                            $('#play-sheet-music').hide();
+                            $('#processing-result').html('<p>Error: Failed to generate sheet music.</p>').show();
+                            $('#sheet-music').empty().hide();
                         }
                     },
                     error: function(xhr) {
-                        $('#processing-result').html(`<p>Error: ${xhr.responseJSON ? xhr.responseJSON.error : xhr.statusText}</p>`);
-                        $('#play-sheet-music').hide();
+                        // Hide processing message
+                        $('#processing-message').hide();
+                        
+                        $('#processing-result').html(`<p>Error: ${xhr.responseJSON ? xhr.responseJSON.error : xhr.statusText}</p>`).show();
+                        $('#sheet-music').empty().hide();
                     }
                 });
-            });
-
-            $('#play-sheet-music').click(function() {
-                if (midiBuffer && midiLoaded) {
-                    MIDI.Player.loadArrayBuffer(midiBuffer);
-                    MIDI.Player.start();
-                    $('#midi-status').text('Playing sheet music...');
-                } else if (!midiLoaded) {
-                    $('#midi-status').text('MIDI sounds are not fully loaded. Please wait and try again.');
-                } else {
-                    $('#midi-status').text('No MIDI data available. Please process the audio first.');
-                }
             });
         });
     </script>

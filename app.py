@@ -21,7 +21,8 @@ def add_header(response):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    disclaimer = "This tool is very much a test and does not yet accurately transcribe music. The purpose is to search songs you want to learn vocal melodies and harmonies for, then select an audio segment from them, then process the audio and get sheet music. Right now the sheet music you'll see given isn't very accurate."
+    return render_template('index.html', disclaimer=disclaimer)
 
 @app.route('/search', methods=['POST'])
 def search_song():
@@ -80,6 +81,7 @@ def process_audio():
         app.logger.debug(f"Selected audio saved to: {wav_file_path}")
 
         app.logger.debug("Processing audio and generating sheet music")
+        processing_message = "Processing audio. This may take 30-60 seconds. Please wait..."
         lead_midi = examine_audio_and_prediction(wav_file_path, skip_noise_reduction=True)
         
         if lead_midi:
@@ -98,7 +100,8 @@ def process_audio():
             
             return jsonify({
                 'musicxml': musicxml,
-                'midi': midi_buffer.getvalue().hex()  # Send MIDI data as hexadecimal string
+                'midi': midi_buffer.getvalue().hex(),  # Send MIDI data as hexadecimal string
+                'processing_message': processing_message
             })
         else:
             app.logger.error("Failed to process audio: No MIDI data generated")
@@ -120,4 +123,4 @@ def serve_soundfont(filename):
     return send_file(f'static/soundfonts/{filename}', mimetype='application/javascript')
 
 if __name__ == '__main__':
-    app.run(debug=False)
+    app.run()
