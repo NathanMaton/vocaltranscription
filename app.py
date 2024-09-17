@@ -1,3 +1,15 @@
+import sys
+import subprocess
+
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+try:
+    import distutils.core
+except ImportError:
+    install('setuptools')
+    import distutils.core
+
 from flask import Flask, render_template, request, jsonify, send_file
 import os
 import requests
