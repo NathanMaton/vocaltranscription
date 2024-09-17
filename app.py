@@ -123,4 +123,4 @@ def serve_soundfont(filename):
     return send_file(f'static/soundfonts/{filename}', mimetype='application/javascript')
 
 if __name__ == '__main__':
-    app.run()
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
